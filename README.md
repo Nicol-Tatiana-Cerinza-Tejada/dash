@@ -22,6 +22,8 @@ mkdir -p data
 python3 app.py
 ```
 
+`requirements.txt` contiene solo lo necesario para ejecutar el dashboard. DuckDB lee el Parquet directamente, por lo que no requiere PyArrow para la app. El notebook de EDA sí usa PyArrow para descargar y escribir datos; ejecútalo preferiblemente con Python 3.11–3.13 si tu versión 3.14 intenta compilar PyArrow.
+
 Abre <http://localhost:8050>.
 
 También puedes indicar otra ubicación:
