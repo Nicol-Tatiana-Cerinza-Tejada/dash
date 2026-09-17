@@ -240,6 +240,7 @@ app.layout = html.Div(
             ],
             className="panel map-panel",
         ),
+        html.Div(id="sex-analysis", className="analysis-section"),
         html.Footer("Fuente: Superintendencia Financiera · datos.gov.co · Dataset w9zh-vetq", className="footer"),
     ],
     className="page",
@@ -364,6 +365,75 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
     except Exception as exc:
         empty = px.scatter(title="No se pudo actualizar la consulta")
         return [html.Div(f"Error de consulta: {exc}", className="error")], empty, empty, empty, empty, empty, empty, "Error al consultar los datos"
+
+
+def analysis_card(fig, explanation: str) -> html.Div:
+    return html.Div([dcc.Graph(figure=fig, config={"displayModeBar": False}), html.P(explanation, className="chart-help")], className="chart-card")
+
+
+@app.callback(
+    Output("sex-analysis", "children"),
+    Input("f-fecha", "start_date"), Input("f-fecha", "end_date"), Input("refresh", "n_clicks"),
+    *[Input(component_id, "value") for component_id in FILTERS],
+)
+def update_sex_analysis(start_date, end_date, _refresh_clicks, *filter_values):
+    selected = dict(zip(FILTERS, filter_values))
+    try:
+        where, params = filter_sql(selected, [start_date, end_date])
+        source = parquet_expr()
+        sex = f'COALESCE("{COL_SEX}", \'Sin dato\')'
+        common = dict(template="plotly_white", margin=dict(l=45, r=20, t=55, b=42), font=dict(family="Inter, sans-serif"))
+
+        access = query(f'''SELECT {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits, SUM(COALESCE({AMOUNT_EXPR}, 0)) AS amount FROM {source} WHERE {where} GROUP BY 1 ORDER BY 1''', params)
+        access_long = access.melt(id_vars="sex", value_vars=["credits", "amount"], var_name="metric", value_name="value")
+        access_long["metric"] = access_long["metric"].map({"credits": "Número de créditos", "amount": "Monto desembolsado"})
+        fig_access = px.bar(access_long, x="sex", y="value", color="metric", barmode="group", title="Acceso al crédito por sexo", labels={"sex": "Sexo", "value": "Valor", "metric": "Indicador"})
+        fig_access.update_yaxes(tickformat=",.0f")
+
+        timeline = query(f'''SELECT {DATE_EXPR} AS date, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY 1''', params)
+        fig_timeline = px.line(timeline, x="date", y="credits", color="sex", markers=True, title="Evolución semanal del número de créditos por sexo", labels={"date": "Fecha de corte", "credits": "Número de créditos", "sex": "Sexo"})
+
+        average = query(f'''SELECT {sex} AS sex, SUM(COALESCE({AMOUNT_EXPR}, 0)) / NULLIF(SUM(COALESCE({CREDITS_EXPR}, 0)), 0) AS average_amount FROM {source} WHERE {where} GROUP BY 1''', params)
+        fig_average = px.bar(average, x="sex", y="average_amount", color="sex", title="Monto promedio del crédito por sexo", labels={"sex": "Sexo", "average_amount": "Monto promedio ($)"}, color_discrete_sequence=px.colors.qualitative.Set2)
+
+        rates = query(f'''SELECT COALESCE("{COL_TYPE}", 'Sin dato') AS credit_type, {sex} AS sex, AVG({RATE_EXPR}) AS rate FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY rate''', params)
+        fig_rates = px.bar(rates, x="rate", y="credit_type", color="sex", barmode="group", orientation="h", title="Tasas de interés por tipo de crédito y sexo", labels={"rate": "% efectiva promedio", "credit_type": "Tipo de crédito", "sex": "Sexo"})
+        rate_timeline = query(f'''SELECT {DATE_EXPR} AS date, {sex} AS sex, AVG({RATE_EXPR}) AS rate FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY 1''', params)
+        fig_rate_timeline = px.line(rate_timeline, x="date", y="rate", color="sex", markers=True, title="Evolución semanal de la tasa por sexo", labels={"date": "Fecha de corte", "rate": "% efectiva promedio", "sex": "Sexo"})
+
+        by_type = query(f'''SELECT COALESCE("{COL_TYPE}", 'Sin dato') AS credit_type, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC LIMIT 40''', params)
+        fig_by_type = px.bar(by_type, x="credit_type", y="credits", color="sex", barmode="group", title="Número de créditos por tipo y sexo", labels={"credit_type": "Tipo de crédito", "credits": "Número de créditos", "sex": "Sexo"})
+
+        guarantees = query(f'''SELECT COALESCE("{COL_GUARANTEE}", 'Sin dato') AS guarantee, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC LIMIT 30''', params)
+        fig_guarantees = px.bar(guarantees, x="guarantee", y="credits", color="sex", barmode="group", title="Garantías utilizadas por sexo", labels={"guarantee": "Tipo de garantía", "credits": "Número de créditos", "sex": "Sexo"})
+
+        terms = query(f'''SELECT COALESCE("{COL_TERM}", 'Sin dato') AS term, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC LIMIT 30''', params)
+        fig_terms = px.bar(terms, x="term", y="credits", color="sex", barmode="group", title="Plazo del crédito por sexo", labels={"term": "Plazo", "credits": "Número de créditos", "sex": "Sexo"})
+
+        activities = query(f'''SELECT CASE WHEN left(regexp_replace(CAST("codigo_ciiu" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '01' THEN 'Agricultura y ganadería' WHEN left(regexp_replace(CAST("codigo_ciiu" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '02' THEN 'Silvicultura' WHEN left(regexp_replace(CAST("codigo_ciiu" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '03' THEN 'Pesca' ELSE 'Otras actividades' END AS activity, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC''', params)
+        fig_activities = px.bar(activities, x="activity", y="credits", color="sex", barmode="group", title="Actividad económica por sexo", labels={"activity": "Actividad económica (CIIU agrupado)", "credits": "Número de créditos", "sex": "Sexo"})
+
+        entities = query(f'''SELECT COALESCE("{COL_ENTITY}", 'Sin dato') AS entity, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC LIMIT 30''', params)
+        fig_entities = px.bar(entities, x="credits", y="entity", color="sex", barmode="group", orientation="h", title="Entidades financieras y sexo", labels={"entity": "Entidad", "credits": "Número de créditos", "sex": "Sexo"})
+
+        companies = query(f'''SELECT COALESCE("{COL_COMPANY}", 'Sin dato') AS company, {sex} AS sex, SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits FROM {source} WHERE {where} GROUP BY 1, 2 ORDER BY credits DESC''', params)
+        fig_companies = px.bar(companies, x="company", y="credits", color="sex", barmode="group", title="Tamaño de empresa por sexo", labels={"company": "Tamaño de empresa", "credits": "Número de créditos", "sex": "Sexo"})
+
+        figures = [fig_access, fig_timeline, fig_average, fig_rates, fig_rate_timeline, fig_by_type, fig_guarantees, fig_terms, fig_activities, fig_entities, fig_companies]
+        for fig in figures:
+            fig.update_layout(**common)
+        return html.Div([
+            html.H2("Análisis de acceso y condiciones por sexo"),
+            html.P("Usa los filtros superiores para estudiar diferencias entre mujeres y hombres. Los valores se calculan sobre los registros filtrados y se agregan en DuckDB.", className="analysis-intro"),
+            html.Div([analysis_card(fig_access, "Eje X: sexo. Eje Y: valor del indicador. Compara simultáneamente cantidad de créditos y monto desembolsado."), analysis_card(fig_timeline, "Eje X: fecha de corte. Eje Y: número de créditos. Muestra la evolución semanal para cada sexo.")], className="grid-2"),
+            html.Div([analysis_card(fig_average, "Eje X: sexo. Eje Y: monto promedio. Se calcula como monto desembolsado dividido entre número de créditos."), analysis_card(fig_rates, "Eje X: tasa efectiva promedio. Eje Y: tipo de crédito. Las barras separan mujeres y hombres.")], className="grid-2"),
+            html.Div([analysis_card(fig_rate_timeline, "Eje X: fecha de corte. Eje Y: tasa efectiva promedio. Permite observar cambios temporales por sexo."), analysis_card(fig_by_type, "Eje X: tipo de crédito. Eje Y: número de créditos. Compara la concentración de cada sexo por producto.")], className="grid-2"),
+            html.Div([analysis_card(fig_guarantees, "Eje X: tipo de garantía. Eje Y: número de créditos. Ayuda a estudiar diferencias en las garantías utilizadas."), analysis_card(fig_terms, "Eje X: plazo del crédito. Eje Y: número de créditos. Compara las condiciones de plazo por sexo.")], className="grid-2"),
+            html.Div([analysis_card(fig_activities, "Eje X: actividad económica agrupada desde CIIU. Eje Y: número de créditos. Destaca agricultura, ganadería, silvicultura y pesca."), analysis_card(fig_entities, "Eje X: número de créditos. Eje Y: entidad financiera. Muestra qué entidades concentran el crédito por sexo.")], className="grid-2"),
+            html.Div([analysis_card(fig_companies, "Eje X: tamaño de empresa. Eje Y: número de créditos. Permite ver si un sexo se concentra en unidades productivas más pequeñas.")], className="panel"),
+        ], className="analysis-content")
+    except Exception as exc:
+        return html.Div(f"No se pudo construir el análisis por sexo: {exc}", className="error")
 
 
 if __name__ == "__main__":

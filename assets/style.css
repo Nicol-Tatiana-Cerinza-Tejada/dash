@@ -19,6 +19,10 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:'DM Sans', 
 .map-note { margin:0 18px 14px; color:var(--muted); font-size:.78rem; }
 .chart-card { min-width:0; }
 .chart-help { margin:0 18px 16px; color:var(--muted); font-size:.78rem; line-height:1.45; }
+.analysis-section { margin-top:24px; }
+.analysis-section h2 { margin:26px 0 6px; font-size:1.55rem; letter-spacing:-.03em; }
+.analysis-intro { color:var(--muted); margin:0 0 14px; }
+.analysis-content .chart-card { background:white; border:1px solid var(--line); border-radius:16px; }
 .filter-label { display:block; margin:0 0 6px; font-size:.78rem; font-weight:700; color:var(--muted); }
 .refresh-button { align-self:end; min-height:38px; padding:0 16px; border:0; border-radius:9px; background:var(--blue); color:white; font:inherit; font-weight:700; cursor:pointer; }
 .refresh-button:hover { background:#0d4f82; }
