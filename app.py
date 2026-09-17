@@ -412,7 +412,10 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
         territory_map.update_layout(
             mapbox_style="open-street-map",
             mapbox_bounds={"west": -80.5, "east": -66.5, "south": -4.5, "north": 13.8},
-            uirevision="colombia",
+            uirevision="|".join(
+                [str(_refresh_clicks), str(map_variable), str(start_date), str(end_date)]
+                + [",".join(value or []) if isinstance(value, list) else str(value or "") for value in filter_values]
+            ),
         )
         for fig in (trend, by_type, by_entity, by_territory, territory_rate, territory_map):
             fig.update_layout(**common)
