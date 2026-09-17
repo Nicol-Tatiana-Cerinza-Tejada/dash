@@ -66,7 +66,31 @@ DATE_EXPR = f'try_cast("{COL_DATE}" AS DATE)'
 RATE_EXPR = f'''try_cast(replace("{COL_RATE}", ',', '.') AS DOUBLE)'''
 AMOUNT_EXPR = f'''try_cast(replace("{COL_AMOUNT}", ',', '.') AS DOUBLE)'''
 CREDITS_EXPR = f'''try_cast(replace("{COL_CREDITS}", ',', '.') AS DOUBLE)'''
-ACTIVITY_EXPR = f'''CASE WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '01' THEN 'Agricultura y ganadería' WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '02' THEN 'Silvicultura' WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '03' THEN 'Pesca' ELSE 'Otras actividades' END'''
+CIIU_DIVISION_EXPR = f'''try_cast(left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) AS INTEGER)'''
+ACTIVITY_EXPR = f'''CASE
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 1 AND 3 THEN 'A · Agricultura, ganadería, silvicultura y pesca'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 5 AND 9 THEN 'B · Explotación de minas y canteras'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 10 AND 33 THEN 'C · Industrias manufactureras'
+    WHEN {CIIU_DIVISION_EXPR} = 35 THEN 'D · Suministro de electricidad, gas y vapor'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 36 AND 39 THEN 'E · Agua, saneamiento y gestión de desechos'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 41 AND 43 THEN 'F · Construcción'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 45 AND 47 THEN 'G · Comercio y reparación de vehículos'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 49 AND 53 THEN 'H · Transporte y almacenamiento'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 55 AND 56 THEN 'I · Alojamiento y servicios de comida'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 58 AND 63 THEN 'J · Información y comunicaciones'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 64 AND 66 THEN 'K · Actividades financieras y de seguros'
+    WHEN {CIIU_DIVISION_EXPR} = 68 THEN 'L · Actividades inmobiliarias'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 69 AND 75 THEN 'M · Actividades profesionales, científicas y técnicas'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 77 AND 82 THEN 'N · Servicios administrativos y de apoyo'
+    WHEN {CIIU_DIVISION_EXPR} = 84 THEN 'O · Administración pública y defensa'
+    WHEN {CIIU_DIVISION_EXPR} = 85 THEN 'P · Educación'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 86 AND 88 THEN 'Q · Salud humana y asistencia social'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 90 AND 93 THEN 'R · Artes, entretenimiento y recreación'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 94 AND 96 THEN 'S · Otras actividades de servicios'
+    WHEN {CIIU_DIVISION_EXPR} BETWEEN 97 AND 98 THEN 'T · Actividades de hogares'
+    WHEN {CIIU_DIVISION_EXPR} = 99 THEN 'U · Organizaciones y entidades extraterritoriales'
+    ELSE 'Sin información CIIU / no clasificada'
+END'''
 
 FILTERS = {
     "f-tipo": COL_TYPE,
@@ -152,7 +176,30 @@ def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[st
 
 def options(column: str) -> list[dict[str, str]]:
     if column == "__actividad__":
-        values = ["Agricultura y ganadería", "Silvicultura", "Pesca", "Otras actividades"]
+        values = [
+            "A · Agricultura, ganadería, silvicultura y pesca",
+            "B · Explotación de minas y canteras",
+            "C · Industrias manufactureras",
+            "D · Suministro de electricidad, gas y vapor",
+            "E · Agua, saneamiento y gestión de desechos",
+            "F · Construcción",
+            "G · Comercio y reparación de vehículos",
+            "H · Transporte y almacenamiento",
+            "I · Alojamiento y servicios de comida",
+            "J · Información y comunicaciones",
+            "K · Actividades financieras y de seguros",
+            "L · Actividades inmobiliarias",
+            "M · Actividades profesionales, científicas y técnicas",
+            "N · Servicios administrativos y de apoyo",
+            "O · Administración pública y defensa",
+            "P · Educación",
+            "Q · Salud humana y asistencia social",
+            "R · Artes, entretenimiento y recreación",
+            "S · Otras actividades de servicios",
+            "T · Actividades de hogares",
+            "U · Organizaciones y entidades extraterritoriales",
+            "Sin información CIIU / no clasificada",
+        ]
         return [{"label": value, "value": value} for value in values]
     if column == "__departamento__":
         values = sorted({row["departamento"] for row in DIVIPOLA.values()})
