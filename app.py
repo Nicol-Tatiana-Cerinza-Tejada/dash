@@ -6,6 +6,7 @@ envían al navegador tablas pequeñas (nunca las decenas de millones de filas).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from dash import Dash, Input, Output, dcc, html
 DATA_PATH = Path(os.getenv("DASH_DATA_PATH", "tasas_2025.parquet"))
 if not DATA_PATH.exists() and Path("tasas_2025.parquet").exists():
     DATA_PATH = Path("tasas_2025.parquet")
+DIVIPOLA_PATH = Path(os.getenv("DIVIPOLA_PATH", "data/divipola_municipios.json"))
 
 COL_DATE = "fecha_corte"
 COL_RATE = "tasa_efectiva_promedio"
@@ -72,7 +74,28 @@ FILTERS = {
     "f-empresa": COL_COMPANY,
     "f-persona": COL_PERSON,
     "f-tasa": COL_RATE_TYPE,
+    "f-departamento": "__departamento__",
+    "f-municipio": COL_MUNICIPALITY,
 }
+
+
+def load_divipola() -> dict[str, dict[str, str]]:
+    if not DIVIPOLA_PATH.exists():
+        return {}
+    payload = json.loads(DIVIPOLA_PATH.read_text(encoding="utf-8"))
+    result = {}
+    for item in payload.get("features", []):
+        row = item.get("attributes", {})
+        code = str(row.get("MPIO_CDPMP", "")).zfill(5)
+        if code and code != "00000":
+            result[code] = {
+                "municipio": str(row.get("MPIO_CNMBRE", "")).strip().title(),
+                "departamento": str(row.get("DPTO_CNMBRE", "")).strip().title(),
+            }
+    return result
+
+
+DIVIPOLA = load_divipola()
 
 app = Dash(__name__, title="Dash — Tasas de interés 2025")
 server = app.server
@@ -106,6 +129,12 @@ def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[st
     for component_id, column in FILTERS.items():
         selected = values.get(component_id)
         if selected:
+            if column == "__departamento__":
+                selected = [code for code, row in DIVIPOLA.items() if row["departamento"] in selected]
+                column = COL_MUNICIPALITY
+            if not selected:
+                clauses.append("1 = 0")
+                continue
             placeholders = ", ".join("?" for _ in selected)
             clauses.append(f'"{column}" IN ({placeholders})')
             params.extend(selected)
@@ -113,6 +142,14 @@ def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[st
 
 
 def options(column: str) -> list[dict[str, str]]:
+    if column == "__departamento__":
+        values = sorted({row["departamento"] for row in DIVIPOLA.values()})
+        return [{"label": value, "value": value} for value in values]
+    if column == COL_MUNICIPALITY and DIVIPOLA:
+        return [
+            {"label": f'{row["municipio"]} ({code})', "value": code}
+            for code, row in sorted(DIVIPOLA.items(), key=lambda item: item[1]["municipio"])
+        ]
     try:
         frame = query(
             f'''SELECT DISTINCT "{column}" AS value
@@ -151,6 +188,8 @@ app.layout = html.Div(
                 selector("f-empresa", "Tamaño de empresa"),
                 selector("f-persona", "Tipo de persona"),
                 selector("f-tasa", "Tipo de tasa"),
+                selector("f-departamento", "Departamento"),
+                selector("f-municipio", "Municipio"),
                 html.Button("Actualizar análisis", id="refresh", n_clicks=0, className="refresh-button"),
             ],
             className="filters",
@@ -257,6 +296,10 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
                 FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
                 GROUP BY 1 ORDER BY credits DESC LIMIT 25''', params
         )
+        territories["municipality_code"] = territories["municipality"].astype(str).str.zfill(5)
+        territories["municipality_name"] = territories["municipality_code"].map(
+            lambda code: DIVIPOLA.get(code, {}).get("municipio", f"Código {code}")
+        )
         if map_variable == "sex":
             map_data = query(
                 f'''SELECT COALESCE("{COL_MUNICIPALITY}", 'Sin código') AS municipality,
@@ -275,6 +318,13 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
                     GROUP BY 1 ORDER BY credits DESC LIMIT 300''', params
             )
         map_data["department"] = map_data["municipality"].astype(str).str[:2]
+        map_data["municipality_code"] = map_data["municipality"].astype(str).str.zfill(5)
+        map_data["municipality_name"] = map_data["municipality_code"].map(
+            lambda code: DIVIPOLA.get(code, {}).get("municipio", f"Código {code}")
+        )
+        map_data["department_name"] = map_data["municipality_code"].map(
+            lambda code: DIVIPOLA.get(code, {}).get("departamento", "Sin departamento")
+        )
         map_data["lat"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[0])
         map_data["lon"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[1])
         cards = [
@@ -287,16 +337,20 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
         trend = px.line(weekly, x="date", y="rate", markers=True, title="Tasa promedio semanal", labels={"date": "Fecha", "rate": "% efectiva"})
         by_type = px.bar(types.sort_values("rate"), x="rate", y="type", orientation="h", title="Tasa promedio por tipo de crédito", labels={"rate": "% efectiva", "type": "Tipo"})
         by_entity = px.bar(entities.sort_values("credits"), x="credits", y="entity", orientation="h", color="rate", title="Top 20 entidades por número de créditos", labels={"credits": "Créditos", "entity": "Entidad", "rate": "% efectiva"}, color_continuous_scale="Blues")
-        by_territory = px.bar(territories.sort_values("credits"), x="credits", y="municipality", orientation="h", title="Top 25 municipios por número de créditos", labels={"credits": "Créditos", "municipality": "Código de municipio"}, color="credits", color_continuous_scale="Blues")
-        territory_rate = px.bar(territories.sort_values("rate"), x="rate", y="municipality", orientation="h", title="Tasa promedio por municipio", labels={"rate": "% efectiva", "municipality": "Código de municipio"}, color="rate", color_continuous_scale="RdYlBu_r")
+        by_territory = px.bar(territories.sort_values("credits"), x="credits", y="municipality_name", orientation="h", title="Top 25 municipios por número de créditos", labels={"credits": "Créditos", "municipality_name": "Municipio"}, color="credits", color_continuous_scale="Blues")
+        territory_rate = px.bar(territories.sort_values("rate"), x="rate", y="municipality_name", orientation="h", title="Tasa promedio por municipio", labels={"rate": "% efectiva", "municipality_name": "Municipio"}, color="rate", color_continuous_scale="RdYlBu_r")
         if map_variable == "sex":
-            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color="sex", size="credits", hover_name="municipality", hover_data={"rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title="Distribución territorial por sexo")
+            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color="sex", size="credits", hover_name="municipality_name", hover_data={"department_name": True, "municipality_code": True, "rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title="Distribución territorial por sexo")
         else:
             color_column = "rate" if map_variable == "rate" else "credits"
             map_title = "Tasa efectiva promedio por territorio" if map_variable == "rate" else "Número de créditos por territorio"
             color_label = "% efectiva" if map_variable == "rate" else "Créditos"
-            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color=color_column, size="credits", hover_name="municipality", hover_data={"rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, color_continuous_scale="RdYlBu_r" if map_variable == "rate" else "Blues", zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title=map_title, labels={color_column: color_label})
-        territory_map.update_layout(mapbox_style="open-street-map")
+            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color=color_column, size="credits", hover_name="municipality_name", hover_data={"department_name": True, "municipality_code": True, "rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, color_continuous_scale="RdYlBu_r" if map_variable == "rate" else "Blues", zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title=map_title, labels={color_column: color_label})
+        territory_map.update_layout(
+            mapbox_style="open-street-map",
+            mapbox_bounds={"west": -80.5, "east": -66.5, "south": -4.5, "north": 13.8},
+            uirevision="colombia",
+        )
         for fig in (trend, by_type, by_entity, by_territory, territory_rate, territory_map):
             fig.update_layout(**common)
         return cards, trend, by_type, by_entity, by_territory, territory_rate, territory_map, f"Consulta optimizada · {int(metrics['rows']):,} filas agregadas en DuckDB"
