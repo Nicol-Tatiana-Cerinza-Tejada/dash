@@ -41,6 +41,22 @@ COL_CREDITS = "numero_de_creditos"
 COL_MUNICIPALITY = "codigo_municipio"
 DEPARTMENT_EXPR = f"left(cast(\"{COL_MUNICIPALITY}\" AS VARCHAR), 2)"
 
+# Centroides departamentales para ubicar aproximadamente los códigos DANE.
+# El dataset no incluye latitud/longitud municipal.
+DEPARTMENT_CENTERS = {
+    "05": (6.25, -75.56), "08": (10.99, -74.79), "11": (4.71, -74.07),
+    "13": (10.40, -75.50), "15": (5.53, -73.36), "17": (5.07, -75.52),
+    "18": (1.61, -75.61), "19": (2.45, -76.61), "20": (10.46, -73.25),
+    "23": (8.75, -75.88), "25": (4.60, -74.08), "27": (5.69, -76.66),
+    "41": (2.93, -75.28), "44": (11.54, -72.91), "47": (11.24, -74.20),
+    "50": (4.15, -73.64), "52": (1.21, -77.28), "54": (7.89, -72.50),
+    "63": (4.53, -75.68), "66": (4.81, -75.69), "68": (7.12, -73.12),
+    "70": (9.30, -75.40), "73": (4.44, -75.24), "76": (3.45, -76.53),
+    "81": (7.09, -70.76), "85": (5.34, -72.39), "86": (1.15, -76.65),
+    "88": (12.58, -81.70), "91": (-1.44, -71.94), "94": (3.87, -67.92),
+    "95": (2.57, -72.64), "97": (1.25, -70.23), "99": (4.08, -69.52),
+}
+
 # Socrata puede exportar estas columnas como texto. Estas conversiones hacen
 # que los callbacks funcionen tanto con Parquet tipado como sin tipar.
 DATE_EXPR = f'try_cast("{COL_DATE}" AS DATE)'
@@ -156,6 +172,33 @@ app.layout = html.Div(
             ],
             className="grid-2",
         ),
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Label("Variable de color del mapa", className="filter-label"),
+                        dcc.Dropdown(
+                            id="f-map-variable",
+                            options=[
+                                {"label": "Tasa efectiva promedio", "value": "rate"},
+                                {"label": "Número de créditos", "value": "credits"},
+                                {"label": "Sexo", "value": "sex"},
+                            ],
+                            value="rate",
+                            clearable=False,
+                        ),
+                    ],
+                    className="map-control",
+                ),
+                dcc.Graph(id="territory-map", config={"displayModeBar": False}),
+                html.P(
+                    "Ubicación aproximada por departamento a partir del código DANE; "
+                    "el dataset no contiene coordenadas municipales.",
+                    className="map-note",
+                ),
+            ],
+            className="panel map-panel",
+        ),
         html.Footer("Fuente: Superintendencia Financiera · datos.gov.co · Dataset w9zh-vetq", className="footer"),
     ],
     className="page",
@@ -171,12 +214,13 @@ def load_options(_):
 
 
 @app.callback(
-    Output("cards", "children"), Output("trend", "figure"), Output("by-type", "figure"), Output("by-entity", "figure"), Output("by-territory", "figure"), Output("territory-rate", "figure"), Output("status", "children"),
+    Output("cards", "children"), Output("trend", "figure"), Output("by-type", "figure"), Output("by-entity", "figure"), Output("by-territory", "figure"), Output("territory-rate", "figure"), Output("territory-map", "figure"), Output("status", "children"),
     Input("f-fecha", "start_date"), Input("f-fecha", "end_date"),
     Input("refresh", "n_clicks"),
+    Input("f-map-variable", "value"),
     *[Input(component_id, "value") for component_id in FILTERS],
 )
-def update_dashboard(start_date, end_date, _refresh_clicks, *filter_values):
+def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filter_values):
     selected = dict(zip(FILTERS, filter_values))
     try:
         where, params = filter_sql(selected, [start_date, end_date])
@@ -213,6 +257,26 @@ def update_dashboard(start_date, end_date, _refresh_clicks, *filter_values):
                 FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
                 GROUP BY 1 ORDER BY credits DESC LIMIT 25''', params
         )
+        if map_variable == "sex":
+            map_data = query(
+                f'''SELECT COALESCE("{COL_MUNICIPALITY}", 'Sin código') AS municipality,
+                           COALESCE("{COL_SEX}", 'Sin dato') AS sex,
+                           AVG({RATE_EXPR}) AS rate,
+                           SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
+                    FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
+                    GROUP BY 1, 2 ORDER BY credits DESC LIMIT 300''', params
+            )
+        else:
+            map_data = query(
+                f'''SELECT COALESCE("{COL_MUNICIPALITY}", 'Sin código') AS municipality,
+                           AVG({RATE_EXPR}) AS rate,
+                           SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
+                    FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
+                    GROUP BY 1 ORDER BY credits DESC LIMIT 300''', params
+            )
+        map_data["department"] = map_data["municipality"].astype(str).str[:2]
+        map_data["lat"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[0])
+        map_data["lon"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[1])
         cards = [
             html.Div([html.Span("Filas analizadas"), html.Strong(f"{int(metrics['rows']):,}")], className="card"),
             html.Div([html.Span("Tasa promedio"), html.Strong(f"{float(metrics['rate'] or 0):.2f}%")], className="card"),
@@ -225,15 +289,23 @@ def update_dashboard(start_date, end_date, _refresh_clicks, *filter_values):
         by_entity = px.bar(entities.sort_values("credits"), x="credits", y="entity", orientation="h", color="rate", title="Top 20 entidades por número de créditos", labels={"credits": "Créditos", "entity": "Entidad", "rate": "% efectiva"}, color_continuous_scale="Blues")
         by_territory = px.bar(territories.sort_values("credits"), x="credits", y="municipality", orientation="h", title="Top 25 municipios por número de créditos", labels={"credits": "Créditos", "municipality": "Código de municipio"}, color="credits", color_continuous_scale="Blues")
         territory_rate = px.bar(territories.sort_values("rate"), x="rate", y="municipality", orientation="h", title="Tasa promedio por municipio", labels={"rate": "% efectiva", "municipality": "Código de municipio"}, color="rate", color_continuous_scale="RdYlBu_r")
-        for fig in (trend, by_type, by_entity, by_territory, territory_rate):
+        if map_variable == "sex":
+            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color="sex", size="credits", hover_name="municipality", hover_data={"rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title="Distribución territorial por sexo")
+        else:
+            color_column = "rate" if map_variable == "rate" else "credits"
+            map_title = "Tasa efectiva promedio por territorio" if map_variable == "rate" else "Número de créditos por territorio"
+            color_label = "% efectiva" if map_variable == "rate" else "Créditos"
+            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color=color_column, size="credits", hover_name="municipality", hover_data={"rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, color_continuous_scale="RdYlBu_r" if map_variable == "rate" else "Blues", zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title=map_title, labels={color_column: color_label})
+        territory_map.update_layout(mapbox_style="open-street-map")
+        for fig in (trend, by_type, by_entity, by_territory, territory_rate, territory_map):
             fig.update_layout(**common)
-        return cards, trend, by_type, by_entity, by_territory, territory_rate, f"Consulta optimizada · {int(metrics['rows']):,} filas agregadas en DuckDB"
+        return cards, trend, by_type, by_entity, by_territory, territory_rate, territory_map, f"Consulta optimizada · {int(metrics['rows']):,} filas agregadas en DuckDB"
     except FileNotFoundError as exc:
         empty = px.scatter(title="Carga el Parquet para iniciar el dashboard")
-        return [html.Div(str(exc), className="error")], empty, empty, empty, empty, empty, "Falta el archivo de datos"
+        return [html.Div(str(exc), className="error")], empty, empty, empty, empty, empty, empty, "Falta el archivo de datos"
     except Exception as exc:
         empty = px.scatter(title="No se pudo actualizar la consulta")
-        return [html.Div(f"Error de consulta: {exc}", className="error")], empty, empty, empty, empty, empty, "Error al consultar los datos"
+        return [html.Div(f"Error de consulta: {exc}", className="error")], empty, empty, empty, empty, empty, empty, "Error al consultar los datos"
 
 
 if __name__ == "__main__":

@@ -8,7 +8,15 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:'DM Sans', 
 .subtitle,.status { color:var(--muted); }
 .subtitle { margin:8px 0 0; }
 .filters,.grid-2 { display:grid; gap:14px; }
-.filters { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); padding:18px; background:white; border:1px solid var(--line); border-radius:16px; }
+.filters { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); padding:18px; background:white; border:1px solid var(--line); border-radius:16px; position:relative; z-index:20; overflow:visible; }
+.filter { position:relative; z-index:1; }
+.filter:focus-within { z-index:1000; }
+.Select { position:relative; z-index:2; }
+.Select-menu-outer { z-index:9999 !important; }
+.Select-menu { max-height:280px !important; }
+.map-control { max-width:360px; padding:16px 16px 0; }
+.map-panel { overflow:visible; }
+.map-note { margin:0 18px 14px; color:var(--muted); font-size:.78rem; }
 .filter-label { display:block; margin:0 0 6px; font-size:.78rem; font-weight:700; color:var(--muted); }
 .refresh-button { align-self:end; min-height:38px; padding:0 16px; border:0; border-radius:9px; background:var(--blue); color:white; font:inherit; font-weight:700; cursor:pointer; }
 .refresh-button:hover { background:#0d4f82; }
