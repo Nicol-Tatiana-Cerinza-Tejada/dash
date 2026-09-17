@@ -223,6 +223,7 @@ app.layout = html.Div(
             ],
             className="grid-2",
         ),
+        html.Div(id="sex-analysis", className="analysis-section"),
         html.Div(
             [
                 html.Div(
@@ -250,7 +251,6 @@ app.layout = html.Div(
             ],
             className="panel map-panel",
         ),
-        html.Div(id="sex-analysis", className="analysis-section"),
         html.Footer("Fuente: Superintendencia Financiera · datos.gov.co · Dataset w9zh-vetq", className="footer"),
     ],
     className="page",
