@@ -176,7 +176,15 @@ def options(column: str) -> list[dict[str, str]]:
 
 def selector(component_id: str, label: str) -> html.Div:
     return html.Div(
-        [html.Label(label, className="filter-label"), dcc.Dropdown(id=component_id, multi=True, placeholder="Todos")],
+        [
+            html.Label(label, className="filter-label"),
+            dcc.Dropdown(
+                id=component_id,
+                options=options(FILTERS[component_id]),
+                multi=True,
+                placeholder="Todos",
+            ),
+        ],
         className="filter",
     )
 
@@ -202,6 +210,7 @@ app.layout = html.Div(
                 selector("f-tasa", "Tipo de tasa"),
                 selector("f-departamento", "Departamento"),
                 selector("f-municipio", "Municipio"),
+                selector("f-actividad", "Actividad económica (CIIU)"),
                 html.Button("Actualizar análisis", id="refresh", n_clicks=0, className="refresh-button"),
             ],
             className="filters",
@@ -255,14 +264,6 @@ app.layout = html.Div(
     ],
     className="page",
 )
-
-
-@app.callback(
-    [Output(component_id, "options") for component_id in FILTERS],
-    [Input("f-fecha", "id")],
-)
-def load_options(_):
-    return [options(column) for column in FILTERS.values()]
 
 
 @app.callback(
