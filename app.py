@@ -91,6 +91,8 @@ def load_divipola() -> dict[str, dict[str, str]]:
             result[code] = {
                 "municipio": str(row.get("MPIO_CNMBRE", "")).strip().title(),
                 "departamento": str(row.get("DPTO_CNMBRE", "")).strip().title(),
+                "lat": item.get("centroid", {}).get("y"),
+                "lon": item.get("centroid", {}).get("x"),
             }
     return result
 
@@ -198,16 +200,16 @@ app.layout = html.Div(
         html.Div(id="cards", className="cards"),
         html.Div(
             [
-                dcc.Graph(id="trend", config={"displayModeBar": False}),
-                dcc.Graph(id="by-type", config={"displayModeBar": False}),
+                html.Div([dcc.Graph(id="trend", config={"displayModeBar": False}), html.P("Eje X: fecha de corte semanal. Eje Y: tasa efectiva promedio. Muestra cómo cambia la tasa en el tiempo.", className="chart-help")], className="chart-card"),
+                html.Div([dcc.Graph(id="by-type", config={"displayModeBar": False}), html.P("Eje X: tasa efectiva promedio. Eje Y: tipo de crédito. Permite comparar el costo promedio entre productos.", className="chart-help")], className="chart-card"),
             ],
             className="grid-2",
         ),
-        html.Div([dcc.Graph(id="by-entity", config={"displayModeBar": False})], className="panel"),
+        html.Div([dcc.Graph(id="by-entity", config={"displayModeBar": False}), html.P("Eje X: número de créditos. Eje Y: entidad financiera. Presenta las 20 entidades con más créditos.", className="chart-help")], className="panel chart-card"),
         html.Div(
             [
-                dcc.Graph(id="by-territory", config={"displayModeBar": False}),
-                dcc.Graph(id="territory-rate", config={"displayModeBar": False}),
+                html.Div([dcc.Graph(id="by-territory", config={"displayModeBar": False}), html.P("Eje X: número de créditos. Eje Y: municipio. Identifica los municipios con mayor volumen de crédito.", className="chart-help")], className="chart-card"),
+                html.Div([dcc.Graph(id="territory-rate", config={"displayModeBar": False}), html.P("Eje X: tasa efectiva promedio. Eje Y: municipio. Compara el costo del crédito por territorio.", className="chart-help")], className="chart-card"),
             ],
             className="grid-2",
         ),
@@ -229,10 +231,10 @@ app.layout = html.Div(
                     ],
                     className="map-control",
                 ),
-                dcc.Graph(id="territory-map", config={"displayModeBar": False}),
+                dcc.Graph(id="territory-map", config={"displayModeBar": False, "scrollZoom": True}),
                 html.P(
-                    "Ubicación aproximada por departamento a partir del código DANE; "
-                    "el dataset no contiene coordenadas municipales.",
+                    "Cada punto corresponde al centroide oficial del municipio DIVIPOLA. "
+                    "Usa la rueda del mouse, doble clic o los botones +/- para acercar y alejar.",
                     className="map-note",
                 ),
             ],
@@ -325,8 +327,10 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
         map_data["department_name"] = map_data["municipality_code"].map(
             lambda code: DIVIPOLA.get(code, {}).get("departamento", "Sin departamento")
         )
-        map_data["lat"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[0])
-        map_data["lon"] = map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[1])
+        map_data["lat"] = map_data["municipality_code"].map(lambda code: DIVIPOLA.get(code, {}).get("lat"))
+        map_data["lon"] = map_data["municipality_code"].map(lambda code: DIVIPOLA.get(code, {}).get("lon"))
+        map_data["lat"] = map_data["lat"].fillna(map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[0]))
+        map_data["lon"] = map_data["lon"].fillna(map_data["department"].map(lambda code: DEPARTMENT_CENTERS.get(code, (4.6, -74.1))[1]))
         cards = [
             html.Div([html.Span("Filas analizadas"), html.Strong(f"{int(metrics['rows']):,}")], className="card"),
             html.Div([html.Span("Tasa promedio"), html.Strong(f"{float(metrics['rate'] or 0):.2f}%")], className="card"),
