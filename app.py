@@ -41,6 +41,7 @@ COL_DEBTOR = "clase_deudor"
 COL_AMOUNT = "montos_desembolsados"
 COL_CREDITS = "numero_de_creditos"
 COL_MUNICIPALITY = "codigo_municipio"
+COL_CIIU = "codigo_ciiu"
 DEPARTMENT_EXPR = f"left(cast(\"{COL_MUNICIPALITY}\" AS VARCHAR), 2)"
 
 # Centroides departamentales para ubicar aproximadamente los códigos DANE.
@@ -65,6 +66,7 @@ DATE_EXPR = f'try_cast("{COL_DATE}" AS DATE)'
 RATE_EXPR = f'''try_cast(replace("{COL_RATE}", ',', '.') AS DOUBLE)'''
 AMOUNT_EXPR = f'''try_cast(replace("{COL_AMOUNT}", ',', '.') AS DOUBLE)'''
 CREDITS_EXPR = f'''try_cast(replace("{COL_CREDITS}", ',', '.') AS DOUBLE)'''
+ACTIVITY_EXPR = f'''CASE WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '01' THEN 'Agricultura y ganadería' WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '02' THEN 'Silvicultura' WHEN left(regexp_replace(CAST("{COL_CIIU}" AS VARCHAR), '[^0-9]', '', 'g'), 2) = '03' THEN 'Pesca' ELSE 'Otras actividades' END'''
 
 FILTERS = {
     "f-tipo": COL_TYPE,
@@ -76,6 +78,7 @@ FILTERS = {
     "f-tasa": COL_RATE_TYPE,
     "f-departamento": "__departamento__",
     "f-municipio": COL_MUNICIPALITY,
+    "f-actividad": "__actividad__",
 }
 
 
@@ -134,6 +137,10 @@ def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[st
             if column == "__departamento__":
                 selected = [code for code, row in DIVIPOLA.items() if row["departamento"] in selected]
                 column = COL_MUNICIPALITY
+            elif column == "__actividad__":
+                clauses.append(f"{ACTIVITY_EXPR} IN ({', '.join('?' for _ in selected)})")
+                params.extend(selected)
+                continue
             if not selected:
                 clauses.append("1 = 0")
                 continue
@@ -144,6 +151,9 @@ def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[st
 
 
 def options(column: str) -> list[dict[str, str]]:
+    if column == "__actividad__":
+        values = ["Agricultura y ganadería", "Silvicultura", "Pesca", "Otras actividades"]
+        return [{"label": value, "value": value} for value in values]
     if column == "__departamento__":
         values = sorted({row["departamento"] for row in DIVIPOLA.values()})
         return [{"label": value, "value": value} for value in values]
@@ -223,7 +233,7 @@ app.layout = html.Div(
                             options=[
                                 {"label": "Tasa efectiva promedio", "value": "rate"},
                                 {"label": "Número de créditos", "value": "credits"},
-                                {"label": "Sexo", "value": "sex"},
+                                {"label": "Actividad económica (CIIU)", "value": "activity"},
                             ],
                             value="rate",
                             clearable=False,
@@ -303,14 +313,14 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
         territories["municipality_name"] = territories["municipality_code"].map(
             lambda code: DIVIPOLA.get(code, {}).get("municipio", f"Código {code}")
         )
-        if map_variable == "sex":
+        if map_variable == "activity":
             map_data = query(
                 f'''SELECT COALESCE("{COL_MUNICIPALITY}", 'Sin código') AS municipality,
-                           COALESCE("{COL_SEX}", 'Sin dato') AS sex,
+                           {ACTIVITY_EXPR} AS activity,
                            AVG({RATE_EXPR}) AS rate,
                            SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
                     FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
-                    GROUP BY 1, 2 ORDER BY credits DESC LIMIT 300''', params
+                    GROUP BY 1, 2 ORDER BY credits DESC LIMIT 500''', params
             )
         else:
             map_data = query(
@@ -344,8 +354,8 @@ def update_dashboard(start_date, end_date, _refresh_clicks, map_variable, *filte
         by_entity = px.bar(entities.sort_values("credits"), x="credits", y="entity", orientation="h", color="rate", title="Top 20 entidades por número de créditos", labels={"credits": "Créditos", "entity": "Entidad", "rate": "% efectiva"}, color_continuous_scale="Blues")
         by_territory = px.bar(territories.sort_values("credits"), x="credits", y="municipality_name", orientation="h", title="Top 25 municipios por número de créditos", labels={"credits": "Créditos", "municipality_name": "Municipio"}, color="credits", color_continuous_scale="Blues")
         territory_rate = px.bar(territories.sort_values("rate"), x="rate", y="municipality_name", orientation="h", title="Tasa promedio por municipio", labels={"rate": "% efectiva", "municipality_name": "Municipio"}, color="rate", color_continuous_scale="RdYlBu_r")
-        if map_variable == "sex":
-            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color="sex", size="credits", hover_name="municipality_name", hover_data={"department_name": True, "municipality_code": True, "rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title="Distribución territorial por sexo")
+        if map_variable == "activity":
+            territory_map = px.scatter_mapbox(map_data, lat="lat", lon="lon", color="activity", size="credits", hover_name="municipality_name", hover_data={"department_name": True, "municipality_code": True, "rate": ":.2f", "credits": ":,.0f", "lat": False, "lon": False}, zoom=4.2, center={"lat": 4.6, "lon": -74.1}, height=560, title="Distribución territorial por actividad económica")
         else:
             color_column = "rate" if map_variable == "rate" else "credits"
             map_title = "Tasa efectiva promedio por territorio" if map_variable == "rate" else "Número de créditos por territorio"
