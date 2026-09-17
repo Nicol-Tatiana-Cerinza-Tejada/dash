@@ -39,6 +39,7 @@ COL_DEBTOR = "clase_deudor"
 COL_AMOUNT = "montos_desembolsados"
 COL_CREDITS = "numero_de_creditos"
 COL_MUNICIPALITY = "codigo_municipio"
+DEPARTMENT_EXPR = f"left(cast(\"{COL_MUNICIPALITY}\" AS VARCHAR), 2)"
 
 # Socrata puede exportar estas columnas como texto. Estas conversiones hacen
 # que los callbacks funcionen tanto con Parquet tipado como sin tipar.
@@ -134,6 +135,7 @@ app.layout = html.Div(
                 selector("f-empresa", "Tamaño de empresa"),
                 selector("f-persona", "Tipo de persona"),
                 selector("f-tasa", "Tipo de tasa"),
+                html.Button("Actualizar análisis", id="refresh", n_clicks=0, className="refresh-button"),
             ],
             className="filters",
         ),
@@ -171,9 +173,10 @@ def load_options(_):
 @app.callback(
     Output("cards", "children"), Output("trend", "figure"), Output("by-type", "figure"), Output("by-entity", "figure"), Output("by-territory", "figure"), Output("territory-rate", "figure"), Output("status", "children"),
     Input("f-fecha", "start_date"), Input("f-fecha", "end_date"),
+    Input("refresh", "n_clicks"),
     *[Input(component_id, "value") for component_id in FILTERS],
 )
-def update_dashboard(start_date, end_date, *filter_values):
+def update_dashboard(start_date, end_date, _refresh_clicks, *filter_values):
     selected = dict(zip(FILTERS, filter_values))
     try:
         where, params = filter_sql(selected, [start_date, end_date])

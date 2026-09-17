@@ -10,6 +10,8 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:'DM Sans', 
 .filters,.grid-2 { display:grid; gap:14px; }
 .filters { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); padding:18px; background:white; border:1px solid var(--line); border-radius:16px; }
 .filter-label { display:block; margin:0 0 6px; font-size:.78rem; font-weight:700; color:var(--muted); }
+.refresh-button { align-self:end; min-height:38px; padding:0 16px; border:0; border-radius:9px; background:var(--blue); color:white; font:inherit; font-weight:700; cursor:pointer; }
+.refresh-button:hover { background:#0d4f82; }
 .status { min-height:26px; padding:14px 0 5px; font-size:.85rem; }
 .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:10px 0 18px; }
 .card,.panel,.grid-2>div { background:white; border:1px solid var(--line); border-radius:16px; }
