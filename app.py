@@ -15,7 +15,7 @@ import plotly.express as px
 from dash import Dash, Input, Output, dcc, html
 
 
-DATA_PATH = Path(os.getenv("DASH_DATA_PATH", "data/tasas_2025.parquet"))
+DATA_PATH = Path(os.getenv("DASH_DATA_PATH", "tasas_2025.parquet"))
 if not DATA_PATH.exists() and Path("tasas_2025.parquet").exists():
     DATA_PATH = Path("tasas_2025.parquet")
 
@@ -38,6 +38,14 @@ COL_AMOUNT_RANGE = "rango_monto_desembolsado"
 COL_DEBTOR = "clase_deudor"
 COL_AMOUNT = "montos_desembolsados"
 COL_CREDITS = "numero_de_creditos"
+COL_MUNICIPALITY = "codigo_municipio"
+
+# Socrata puede exportar estas columnas como texto. Estas conversiones hacen
+# que los callbacks funcionen tanto con Parquet tipado como sin tipar.
+DATE_EXPR = f'try_cast("{COL_DATE}" AS DATE)'
+RATE_EXPR = f'''try_cast(replace("{COL_RATE}", ',', '.') AS DOUBLE)'''
+AMOUNT_EXPR = f'''try_cast(replace("{COL_AMOUNT}", ',', '.') AS DOUBLE)'''
+CREDITS_EXPR = f'''try_cast(replace("{COL_CREDITS}", ',', '.') AS DOUBLE)'''
 
 FILTERS = {
     "f-tipo": COL_TYPE,
@@ -73,10 +81,10 @@ def query(sql: str, params: list[Any] | None = None):
 
 
 def filter_sql(values: dict[str, Any], date_range: list[str] | None) -> tuple[str, list[Any]]:
-    clauses = [f"{COL_RATE} IS NOT NULL"]
+    clauses = [f"{RATE_EXPR} IS NOT NULL"]
     params: list[Any] = []
     if date_range and len(date_range) == 2:
-        clauses += [f"{COL_DATE} >= ?", f"{COL_DATE} <= ?"]
+        clauses += [f"{DATE_EXPR} >= CAST(? AS DATE)", f"{DATE_EXPR} <= CAST(? AS DATE)"]
         params.extend(date_range)
     for component_id, column in FILTERS.items():
         selected = values.get(component_id)
@@ -139,6 +147,13 @@ app.layout = html.Div(
             className="grid-2",
         ),
         html.Div([dcc.Graph(id="by-entity", config={"displayModeBar": False})], className="panel"),
+        html.Div(
+            [
+                dcc.Graph(id="by-territory", config={"displayModeBar": False}),
+                dcc.Graph(id="territory-rate", config={"displayModeBar": False}),
+            ],
+            className="grid-2",
+        ),
         html.Footer("Fuente: Superintendencia Financiera · datos.gov.co · Dataset w9zh-vetq", className="footer"),
     ],
     className="page",
@@ -154,7 +169,7 @@ def load_options(_):
 
 
 @app.callback(
-    Output("cards", "children"), Output("trend", "figure"), Output("by-type", "figure"), Output("by-entity", "figure"), Output("status", "children"),
+    Output("cards", "children"), Output("trend", "figure"), Output("by-type", "figure"), Output("by-entity", "figure"), Output("by-territory", "figure"), Output("territory-rate", "figure"), Output("status", "children"),
     Input("f-fecha", "start_date"), Input("f-fecha", "end_date"),
     *[Input(component_id, "value") for component_id in FILTERS],
 )
@@ -164,29 +179,36 @@ def update_dashboard(start_date, end_date, *filter_values):
         where, params = filter_sql(selected, [start_date, end_date])
         source = parquet_expr()
         metrics = query(
-            f'''SELECT COUNT(*) AS rows, AVG({COL_RATE}) AS rate,
-                       SUM(COALESCE({COL_AMOUNT}, 0)) AS amount,
-                       SUM(COALESCE({COL_CREDITS}, 0)) AS credits
+            f'''SELECT COUNT(*) AS rows, AVG({RATE_EXPR}) AS rate,
+                       SUM(COALESCE({AMOUNT_EXPR}, 0)) AS amount,
+                       SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
                 FROM {source} WHERE {where}''', params
         ).iloc[0]
         weekly = query(
-            f'''SELECT CAST({COL_DATE} AS DATE) AS date, AVG({COL_RATE}) AS rate,
-                       SUM(COALESCE({COL_CREDITS}, 0)) AS credits
+            f'''SELECT {DATE_EXPR} AS date, AVG({RATE_EXPR}) AS rate,
+                       SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
                 FROM {source} WHERE {where}
                 GROUP BY 1 ORDER BY 1''', params
         )
         types = query(
-            f'''SELECT COALESCE({COL_TYPE}, 'Sin dato') AS type, AVG({COL_RATE}) AS rate,
-                       SUM(COALESCE({COL_CREDITS}, 0)) AS credits
+            f'''SELECT COALESCE("{COL_TYPE}", 'Sin dato') AS type, AVG({RATE_EXPR}) AS rate,
+                       SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits
                 FROM {source} WHERE {where}
                 GROUP BY 1 ORDER BY credits DESC LIMIT 25''', params
         )
         entities = query(
-            f'''SELECT COALESCE({COL_ENTITY}, 'Sin dato') AS entity,
-                       SUM(COALESCE({COL_CREDITS}, 0)) AS credits,
-                       AVG({COL_RATE}) AS rate
+            f'''SELECT COALESCE("{COL_ENTITY}", 'Sin dato') AS entity,
+                       SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits,
+                       AVG({RATE_EXPR}) AS rate
                 FROM {source} WHERE {where}
                 GROUP BY 1 ORDER BY credits DESC LIMIT 20''', params
+        )
+        territories = query(
+            f'''SELECT COALESCE("{COL_MUNICIPALITY}", 'Sin código') AS municipality,
+                       SUM(COALESCE({CREDITS_EXPR}, 0)) AS credits,
+                       AVG({RATE_EXPR}) AS rate
+                FROM {source} WHERE {where} AND "{COL_MUNICIPALITY}" IS NOT NULL
+                GROUP BY 1 ORDER BY credits DESC LIMIT 25''', params
         )
         cards = [
             html.Div([html.Span("Filas analizadas"), html.Strong(f"{int(metrics['rows']):,}")], className="card"),
@@ -198,12 +220,17 @@ def update_dashboard(start_date, end_date, *filter_values):
         trend = px.line(weekly, x="date", y="rate", markers=True, title="Tasa promedio semanal", labels={"date": "Fecha", "rate": "% efectiva"})
         by_type = px.bar(types.sort_values("rate"), x="rate", y="type", orientation="h", title="Tasa promedio por tipo de crédito", labels={"rate": "% efectiva", "type": "Tipo"})
         by_entity = px.bar(entities.sort_values("credits"), x="credits", y="entity", orientation="h", color="rate", title="Top 20 entidades por número de créditos", labels={"credits": "Créditos", "entity": "Entidad", "rate": "% efectiva"}, color_continuous_scale="Blues")
-        for fig in (trend, by_type, by_entity):
+        by_territory = px.bar(territories.sort_values("credits"), x="credits", y="municipality", orientation="h", title="Top 25 municipios por número de créditos", labels={"credits": "Créditos", "municipality": "Código de municipio"}, color="credits", color_continuous_scale="Blues")
+        territory_rate = px.bar(territories.sort_values("rate"), x="rate", y="municipality", orientation="h", title="Tasa promedio por municipio", labels={"rate": "% efectiva", "municipality": "Código de municipio"}, color="rate", color_continuous_scale="RdYlBu_r")
+        for fig in (trend, by_type, by_entity, by_territory, territory_rate):
             fig.update_layout(**common)
-        return cards, trend, by_type, by_entity, f"Consulta optimizada · {int(metrics['rows']):,} filas agregadas en DuckDB"
+        return cards, trend, by_type, by_entity, by_territory, territory_rate, f"Consulta optimizada · {int(metrics['rows']):,} filas agregadas en DuckDB"
     except FileNotFoundError as exc:
         empty = px.scatter(title="Carga el Parquet para iniciar el dashboard")
-        return [html.Div(str(exc), className="error")], empty, empty, empty, "Falta el archivo de datos"
+        return [html.Div(str(exc), className="error")], empty, empty, empty, empty, empty, "Falta el archivo de datos"
+    except Exception as exc:
+        empty = px.scatter(title="No se pudo actualizar la consulta")
+        return [html.Div(f"Error de consulta: {exc}", className="error")], empty, empty, empty, empty, empty, "Error al consultar los datos"
 
 
 if __name__ == "__main__":
